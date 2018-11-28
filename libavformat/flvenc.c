@@ -81,6 +81,7 @@ typedef struct FLVFileposition {
 typedef struct FLVContext {
     AVClass *av_class;
     int     reserved;
+    int     annexb_output_format; //specify the output is annexb or not
     int64_t duration_offset;
     int64_t filesize_offset;
     int64_t duration;
@@ -539,7 +540,11 @@ static void flv_write_codec_header(AVFormatContext* s, AVCodecParameters* par, i
             avio_w8(pb, 0); // AVC sequence header
             avio_wb24(pb, 0); // composition time
             if (par->codec_id == AV_CODEC_ID_HEVC) {
-                ff_isom_write_hvcc(pb, par->extradata, par->extradata_size, 0);
+                if (flv->annexb_output_format) { //annex b format, needs -bsf:v hevc_mp4toannexb
+                    avio_write(pb, par->extradata, par->extradata_size);
+                } else {
+                    ff_isom_write_hvcc(pb, par->extradata, par->extradata_size, 0); //mp4 format
+                }
             } else {
                 ff_isom_write_avcc(pb, par->extradata, par->extradata_size);
             }
@@ -968,9 +973,13 @@ static int flv_write_packet(AVFormatContext *s, AVPacket *pkt)
             if ((ret = ff_avc_parse_nal_units_buf(pkt->data, &data, &size)) < 0)
                 return ret;
     } else if (par->codec_id == AV_CODEC_ID_HEVC) {
-        if (par->extradata_size > 0 && *(uint8_t*)par->extradata != 1)
-            if ((ret = ff_hevc_annexb2mp4_buf(pkt->data, &data, &size, 0, NULL)) < 0)
-                return ret;
+        if (flv->annexb_output_format) {
+            size = pkt->size; //set the size now. -- keep raw-data
+        } else {
+            if (par->extradata_size > 0 && *(uint8_t*)par->extradata != 1)
+                if ((ret = ff_hevc_annexb2mp4_buf(pkt->data, &data, &size, 0, NULL)) < 0)
+                    return ret;
+        }
     } else if (par->codec_id == AV_CODEC_ID_AAC && pkt->size > 2 &&
                (AV_RB16(pkt->data) & 0xfff0) == 0xfff0) {
         if (!s->streams[pkt->stream_index]->nb_frames) {
@@ -1092,6 +1101,7 @@ static const AVOption options[] = {
     { "no_metadata", "disable metadata for FLV", 0, AV_OPT_TYPE_CONST, {.i64 = FLV_NO_METADATA}, INT_MIN, INT_MAX, AV_OPT_FLAG_ENCODING_PARAM, "flvflags" },
     { "no_duration_filesize", "disable duration and filesize zero value metadata for FLV", 0, AV_OPT_TYPE_CONST, {.i64 = FLV_NO_DURATION_FILESIZE}, INT_MIN, INT_MAX, AV_OPT_FLAG_ENCODING_PARAM, "flvflags" },
     { "add_keyframe_index", "Add keyframe index metadata", 0, AV_OPT_TYPE_CONST, {.i64 = FLV_ADD_KEYFRAME_INDEX}, INT_MIN, INT_MAX, AV_OPT_FLAG_ENCODING_PARAM, "flvflags" },
+    { "annexb", "set the stream output mode as annexb-format [0,1], it is 1 by default.-- only work for hevc.", offsetof(FLVContext, annexb_output_format), AV_OPT_TYPE_INT, {.i64 = 1}, 0, 1, AV_OPT_FLAG_ENCODING_PARAM },
     { NULL },
 };
 
