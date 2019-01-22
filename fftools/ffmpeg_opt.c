@@ -638,9 +638,8 @@ static int opt_recording_timestamp(void *optctx, const char *opt, const char *ar
 {
     OptionsContext *o = optctx;
     char buf[128];
-    int64_t recording_timestamp = parse_time_or_die(opt, arg, 0) / 1E6;
-    struct tm time = *gmtime((time_t*)&recording_timestamp);
-    if (!strftime(buf, sizeof(buf), "creation_time=%Y-%m-%dT%H:%M:%S%z", &time))
+    int64_t recording_timestamp = parse_time_or_die(opt, arg, 0) / 1E3;
+    if (!sprintf(buf, "creation_time=%ld", recording_timestamp))
         return -1;
     parse_option(o, "metadata", buf, options);
 
