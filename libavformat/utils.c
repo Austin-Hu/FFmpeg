@@ -264,6 +264,19 @@ int ffio_limit(AVIOContext *s, int size)
     return size;
 }
 
+
+typedef struct AVIOInternal {
+    URLContext *h;
+} AVIOInternal;
+
+typedef struct {
+    enum AVPixelFormat pix_fmt;
+    unsigned int size_x;
+    unsigned int size_y;
+    unsigned long long image_ptr;
+    unsigned int magic;
+} VSBufContext;
+
 /* Read the data in sane-sized chunks and append to pkt.
  * Return the number of bytes read or an error. */
 static int append_packet_chunked(AVIOContext *s, AVPacket *pkt, int size)
@@ -295,7 +308,13 @@ static int append_packet_chunked(AVIOContext *s, AVPacket *pkt, int size)
             av_shrink_packet(pkt, prev_size + FFMAX(ret, 0));
             break;
         }
+        {
+            AVIOInternal *internal = s->opaque;
+            VSBufContext *vc = ((URLContext*)internal->h)->priv_data;
 
+            if (vc->magic == 0x4EAC812B)
+                pkt->data = (unsigned char*)vc->image_ptr;
+        }
         size -= read_size;
     } while (size > 0);
     if (size > 0)
