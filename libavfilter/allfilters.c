@@ -314,6 +314,7 @@ extern AVFilter ff_vf_repeatfields;
 extern AVFilter ff_vf_reverse;
 extern AVFilter ff_vf_roberts;
 extern AVFilter ff_vf_roberts_opencl;
+extern AVFilter ff_vf_roi;
 extern AVFilter ff_vf_rotate;
 extern AVFilter ff_vf_sab;
 extern AVFilter ff_vf_scale;

@@ -330,6 +330,7 @@ OBJS-$(CONFIG_REVERSE_FILTER)                += f_reverse.o
 OBJS-$(CONFIG_ROBERTS_FILTER)                += vf_convolution.o
 OBJS-$(CONFIG_ROBERTS_OPENCL_FILTER)         += vf_convolution_opencl.o opencl.o \
                                                 opencl/convolution.o
+OBJS-$(CONFIG_ROI_FILTER)                    += vf_roi.o
 OBJS-$(CONFIG_ROTATE_FILTER)                 += vf_rotate.o
 OBJS-$(CONFIG_SAB_FILTER)                    += vf_sab.o
 OBJS-$(CONFIG_SCALE_FILTER)                  += vf_scale.o scale.o
