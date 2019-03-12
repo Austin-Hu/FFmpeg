@@ -266,6 +266,7 @@ extern AVFilter ff_vf_mcdeint;
 extern AVFilter ff_vf_mergeplanes;
 extern AVFilter ff_vf_mestimate;
 extern AVFilter ff_vf_metadata;
+extern AVFilter ff_vf_di_metadata;
 extern AVFilter ff_vf_midequalizer;
 extern AVFilter ff_vf_minterpolate;
 extern AVFilter ff_vf_mix;
