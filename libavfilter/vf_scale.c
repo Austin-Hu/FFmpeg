@@ -409,6 +409,9 @@ static int filter_frame(AVFilterLink *link, AVFrame *in)
     char buf[32];
     int in_range;
 
+    if (strstr(link->dst->av_class->item_name(&link->dst->av_class), "scaler_out_"))
+        return ff_filter_frame(outlink, in);
+
     if (in->colorspace == AVCOL_SPC_YCGCO)
         av_log(link->dst, AV_LOG_WARNING, "Detected unsupported YCgCo colorspace.\n");
 
