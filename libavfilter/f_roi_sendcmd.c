@@ -32,8 +32,8 @@
 #include "internal.h"
 #include "video.h"
 
-#define SCALE_DST_WIDTH  "512"
-#define SCALE_DST_HEIGHT "512"
+#define SCALE_DST_WIDTH  512
+#define SCALE_DST_HEIGHT 512
 
 typedef struct ROISendCmdContext {
     const AVClass *class;
@@ -71,7 +71,9 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     ROISendCmdContext *s = ctx->priv;
     const char *filter_crop = "crop";
     const char *filter_scale = "scale";
+    int roi_width = 0, roi_height = 0;
     char buf[1024];
+    char tmp[10];
 
     if (av_stristr(s->commands_str, filter_crop)) {
         // Here s->commands_str is actually the name of crop filter instance.
@@ -92,10 +94,27 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
                 buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
     } else if (av_stristr(s->commands_str, filter_scale)) {
         // Here s->commands_str is actually the name of scale filter instance.
-        avfilter_graph_send_command(inlink->graph, filter_scale, "w",
-                SCALE_DST_WIDTH, buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
-        avfilter_graph_send_command(inlink->graph, filter_scale, "h",
-                SCALE_DST_HEIGHT, buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
+        // To keep aspect ratio after scaling.
+        roi_width = atoi(av_dict_get(in->metadata, "width", NULL, 0)->value);
+        roi_height = atoi(av_dict_get(in->metadata, "height", NULL, 0)->value);
+
+        if (roi_width >= roi_height) {
+            sprintf(tmp, "%d", SCALE_DST_WIDTH);
+            avfilter_graph_send_command(inlink->graph, filter_scale, "w",
+                    tmp, buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
+
+            sprintf(tmp, "%d", roi_height * SCALE_DST_WIDTH / roi_width);
+            avfilter_graph_send_command(inlink->graph, filter_scale, "h",
+                    tmp, buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
+        } else {
+            sprintf(tmp, "%d", roi_width * SCALE_DST_HEIGHT / roi_height);
+            avfilter_graph_send_command(inlink->graph, filter_scale, "w",
+                    tmp, buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
+
+            sprintf(tmp, "%d", SCALE_DST_HEIGHT);
+            avfilter_graph_send_command(inlink->graph, filter_scale, "h",
+                    tmp, buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
+        }
     } else
         av_log(ctx, AV_LOG_ERROR,
                 "Invalid command for the %s filter.\n",
