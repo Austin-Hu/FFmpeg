@@ -463,7 +463,7 @@ finish:
     return ret;
 }
 
-static int amf_parse_object(AVFormatContext *s, AVStream *astream,
+static int amf_parse_object(AVFormatContext *s, AVPacket *pkt, AVStream *astream,
                             AVStream *vstream, const char *key,
                             int64_t max_pos, int depth)
 {
@@ -473,6 +473,8 @@ static int amf_parse_object(AVFormatContext *s, AVStream *astream,
     AMFDataType amf_type;
     char str_val[1024];
     double num_val;
+    uint8_t *old_side_data = NULL, *side_data = NULL, *tmp_side_data = NULL;
+    int old_side_data_size = 0, new_side_data_size = 0;
 
     num_val  = 0;
     ioc      = s->pb;
@@ -502,7 +504,7 @@ static int amf_parse_object(AVFormatContext *s, AVStream *astream,
                 add_keyframes_index(s);
         while (avio_tell(ioc) < max_pos - 2 &&
                amf_get_string(ioc, str_val, sizeof(str_val)) > 0)
-            if (amf_parse_object(s, astream, vstream, str_val, max_pos,
+            if (amf_parse_object(s, NULL, astream, vstream, str_val, max_pos,
                                  depth + 1) < 0)
                 return -1;     // if we couldn't skip, bomb out.
         if (avio_r8(ioc) != AMF_END_OF_OBJECT) {
@@ -522,7 +524,7 @@ static int amf_parse_object(AVFormatContext *s, AVStream *astream,
                amf_get_string(ioc, str_val, sizeof(str_val)) > 0)
             // this is the only case in which we would want a nested
             // parse to not skip over the object
-            if (amf_parse_object(s, astream, vstream, str_val, max_pos,
+            if (amf_parse_object(s, pkt, astream, vstream, str_val, max_pos,
                                  depth + 1) < 0)
                 return -1;
         v = avio_r8(ioc);
@@ -538,7 +540,7 @@ static int amf_parse_object(AVFormatContext *s, AVStream *astream,
 
         arraylen = avio_rb32(ioc);
         for (i = 0; i < arraylen && avio_tell(ioc) < max_pos - 1; i++)
-            if (amf_parse_object(s, NULL, NULL, NULL, max_pos,
+            if (amf_parse_object(s, NULL, NULL, NULL, NULL, max_pos,
                                  depth + 1) < 0)
                 return -1;      // if we couldn't skip, bomb out.
     }
@@ -598,6 +600,39 @@ static int amf_parse_object(AVFormatContext *s, AVStream *astream,
                     } else if (!strcmp(key, "height") && vpar) {
                         vpar->height = num_val;
                     }
+                } else if (pkt) {
+                    // Got per-frame metadata, and insert each into the side_data of AVPacket.
+                    // Because av_packet_new_side_data() doesn't support the duplicated side
+                    // data type, we've to append the new data with the original side data.
+                    old_side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, &old_side_data_size);
+                    snprintf(str_val, sizeof(str_val), "%.f", num_val);
+                    new_side_data_size = old_side_data_size + strlen(key) + strlen(str_val) + 2; // 2 '\0' characters.
+
+                    // The format of assembled side data is "KEY_0 VALUE_0 KEY_1 VALUE_1 ...... KEY_N VALUE_N",
+                    // where keys and values are separated by '\0', because it's required during the parsing
+                    // process by av_packet_unpack_dictionary().
+                    if (old_side_data && old_side_data_size > 0) {
+                        tmp_side_data = av_mallocz(new_side_data_size);
+                        memcpy(tmp_side_data, old_side_data, old_side_data_size);
+                        memcpy(tmp_side_data + old_side_data_size, key, strlen(key));
+                        *(tmp_side_data + old_side_data_size + strlen(key)) = '\0';
+                        memcpy(tmp_side_data + old_side_data_size + strlen(key) + 1, str_val, strlen(str_val));
+                        *(tmp_side_data + old_side_data_size + strlen(key) + 1 + strlen(str_val)) = '\0';
+
+                        av_packet_free_side_data(pkt);
+
+                        side_data = av_packet_new_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, new_side_data_size);
+                        if (side_data)
+                            memcpy(side_data, tmp_side_data, new_side_data_size);
+
+                        av_freep(&tmp_side_data);
+                    } else {
+                        side_data = av_packet_new_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, new_side_data_size);
+                        memcpy(side_data, key, strlen(key));
+                        *(side_data + strlen(key)) = '\0';
+                        memcpy(side_data + strlen(key) + 1, str_val, strlen(str_val));
+                        *(side_data + strlen(key) + 1 + strlen(str_val)) = '\0';
+                    }
                 }
             }
             if (amf_type == AMF_DATA_TYPE_STRING) {
@@ -653,6 +688,7 @@ static int amf_parse_object(AVFormatContext *s, AVStream *astream,
 #define TYPE_ONTEXTDATA 1
 #define TYPE_ONCAPTION 2
 #define TYPE_ONCAPTIONINFO 3
+#define TYPE_ONPERFRAME 4
 #define TYPE_UNKNOWN 9
 
 static int flv_read_metabody(AVFormatContext *s, int64_t next_pos)
@@ -685,6 +721,9 @@ static int flv_read_metabody(AVFormatContext *s, int64_t next_pos)
     if (!strcmp(buffer, "onCaptionInfo"))
         return TYPE_ONCAPTIONINFO;
 
+    if (!strcmp(buffer, "perFrameMetaData"))
+        return TYPE_ONPERFRAME;
+
     if (strcmp(buffer, "onMetaData") && strcmp(buffer, "onCuePoint")) {
         av_log(s, AV_LOG_DEBUG, "Unknown type %s\n", buffer);
         return TYPE_UNKNOWN;
@@ -707,7 +746,32 @@ static int flv_read_metabody(AVFormatContext *s, int64_t next_pos)
     }
 
     // parse the second object (we want a mixed array)
-    if (amf_parse_object(s, astream, vstream, buffer, next_pos, 0) < 0)
+    if (amf_parse_object(s, NULL, astream, vstream, buffer, next_pos, 0) < 0)
+        return -1;
+
+    return 0;
+}
+
+static int flv_read_per_frame_metabody(AVFormatContext *s, AVPacket *pkt,
+        int64_t dts, int64_t next_pos)
+{
+    AMFDataType type;
+    AVIOContext *ioc = s->pb;
+    char buffer[32];
+
+    // first object needs to be "perFrameMetaData" string
+    type = avio_r8(ioc);
+    if (type != AMF_DATA_TYPE_STRING ||
+        amf_get_string(ioc, buffer, sizeof(buffer)) < 0)
+        return TYPE_UNKNOWN;
+
+    if (strcmp(buffer, "perFrameMetaData")) {
+        av_log(s, AV_LOG_DEBUG, "Unknown type %s\n", buffer);
+        return TYPE_UNKNOWN;
+    }
+
+    // parse the second object (we want a mixed array)
+    if (amf_parse_object(s, pkt, NULL, NULL, buffer, next_pos, 0) < 0)
         return -1;
 
     return 0;
@@ -953,6 +1017,8 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
     AVStream *st    = NULL;
     int last = -1;
     int orig_size;
+    uint8_t *old_side_data = NULL, *side_data = NULL, *tmp_side_data = NULL;
+    int old_side_data_size = 0;
 
 retry:
     /* pkt size is repeated at end. skip it */
@@ -1022,6 +1088,10 @@ retry:
                     return flv_data_packet(s, pkt, dts, next);
                 } else if (type == TYPE_ONCAPTION) {
                     return flv_data_packet(s, pkt, dts, next);
+                } else if (type == TYPE_ONPERFRAME) {
+                    // Reset the parser which was shifted by 1 byte in flv_read_metabody().
+                    avio_seek(s->pb, meta_pos, SEEK_SET);
+                    flv_read_per_frame_metabody(s, pkt, dts, size + avio_tell(s->pb));
                 }
                 avio_seek(s->pb, meta_pos, SEEK_SET);
             }
@@ -1235,6 +1305,16 @@ retry_duration:
         goto leave;
     }
 
+    // Backup the inserted per-frame metadata, which would be cleared by av_get_packet() later.
+    // Temporarily backup the AV_PKT_DATA_STRINGS_METADATA type side data.
+    old_side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, &old_side_data_size);
+
+    if (old_side_data && old_side_data_size > 0) {
+        tmp_side_data = av_mallocz(old_side_data_size);
+        memcpy(tmp_side_data, old_side_data, old_side_data_size);
+        av_packet_free_side_data(pkt);
+    }
+
     ret = av_get_packet(s->pb, pkt, size);
     if (ret < 0)
         return ret;
@@ -1251,6 +1331,14 @@ retry_duration:
             av_freep(&flv->new_extradata[stream_type]);
             flv->new_extradata_size[stream_type] = 0;
         }
+    }
+
+    if (old_side_data_size > 0) {
+        side_data = av_packet_new_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, old_side_data_size);
+        if (side_data)
+            memcpy(side_data, tmp_side_data, old_side_data_size);
+
+        av_freep(&tmp_side_data);
     }
     if (stream_type == FLV_STREAM_TYPE_AUDIO &&
                     (sample_rate != flv->last_sample_rate ||

@@ -476,6 +476,81 @@ static void write_metadata(AVFormatContext *s, unsigned int ts)
     avio_wb32(pb, flv->metadata_totalsize + 11);
 }
 
+#define PER_FRAME_METADATA_ENTRIES 4
+static int frame_cnt = 0;
+static void write_per_frame_metadata(AVFormatContext *s, AVPacket *pkt,
+        unsigned int ts)
+{
+    AVIOContext *pb = s->pb;
+    FLVContext *flv = s->priv_data;
+    int metadata_count = 0;
+    int64_t metadata_count_pos = 0;
+
+    /* write meta_tag */
+    avio_w8(pb, FLV_TAG_TYPE_META);            // tag type META
+    flv->metadata_size_pos = avio_tell(pb);
+    avio_wb24(pb, 0);           // size of data part (sum of all parts below)
+    avio_wb24(pb, ts);          // timestamp
+    avio_wb32(pb, 0);           // StreamID
+
+    /* now data of data_size size */
+
+    /* first event name as a string */
+    avio_w8(pb, AMF_DATA_TYPE_STRING);
+    put_amf_string(pb, "perFrameMetaData"); // 12 bytes
+
+    /* mixed array (hash) with size and string/type/data tuples */
+    avio_w8(pb, AMF_DATA_TYPE_MIXEDARRAY);
+    metadata_count_pos = avio_tell(pb);
+    metadata_count = PER_FRAME_METADATA_ENTRIES;
+    avio_wb32(pb, metadata_count);
+
+    // TODO: remove the experimental metadata change per 10 frames, after
+    // getting the dynamic metadata or side data of AVFrame during encoding.
+    frame_cnt++;
+    put_amf_string(pb, "per_frame_top");
+    if (frame_cnt / 10)
+        put_amf_double(pb, 300);
+    else
+        put_amf_double(pb, 320);
+
+    put_amf_string(pb, "per_frame_left");
+    if (frame_cnt / 10)
+        put_amf_double(pb, 400);
+    else
+        put_amf_double(pb, 430);
+
+    put_amf_string(pb, "per_frame_width");
+    if (frame_cnt / 10)
+        put_amf_double(pb, 2000);
+    else
+        put_amf_double(pb, 2500);
+
+    put_amf_string(pb, "per_frame_height");
+    if (frame_cnt / 10)
+        put_amf_double(pb, 1000);
+    else
+        put_amf_double(pb, 1700);
+
+    if (frame_cnt >= 20)
+        frame_cnt = 0;
+
+    put_amf_string(pb, "");
+    avio_w8(pb, AMF_END_OF_OBJECT);
+
+    /* write total size of tag */
+    flv->metadata_totalsize = avio_tell(pb) - flv->metadata_size_pos - 10;
+
+    avio_seek(pb, metadata_count_pos, SEEK_SET);
+    avio_wb32(pb, metadata_count);
+
+    avio_seek(pb, flv->metadata_size_pos, SEEK_SET);
+    avio_wb24(pb, flv->metadata_totalsize);
+    avio_skip(pb, flv->metadata_totalsize + 10 - 3);
+    flv->metadata_totalsize_pos = avio_tell(pb);
+    avio_wb32(pb, flv->metadata_totalsize + 11);
+}
+
 static int unsupported_codec(AVFormatContext *s,
                              const char* type, int codec_id)
 {
@@ -940,6 +1015,8 @@ static int flv_write_packet(AVFormatContext *s, AVPacket *pkt)
         write_metadata(s, ts);
         s->event_flags &= ~AVSTREAM_EVENT_FLAG_METADATA_UPDATED;
     }
+
+    write_per_frame_metadata(s, pkt, ts);
 
     avio_write_marker(pb, av_rescale(ts, AV_TIME_BASE, 1000),
                       pkt->flags & AV_PKT_FLAG_KEY && (flv->video_par ? par->codec_type == AVMEDIA_TYPE_VIDEO : 1) ? AVIO_DATA_MARKER_SYNC_POINT : AVIO_DATA_MARKER_BOUNDARY_POINT);
