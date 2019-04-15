@@ -1066,8 +1066,6 @@ static void do_video_out(OutputFile *of,
     int frame_size = 0;
     InputStream *ist = NULL;
     AVFilterContext *filter = ost->filter->filter;
-    int metadata_len = 0;
-    uint8_t *packed_metadata = NULL;
 
     if (ost->source_index >= 0)
         ist = input_streams[ost->source_index];
@@ -1298,7 +1296,6 @@ static void do_video_out(OutputFile *of,
         while (1) {
             ret = avcodec_receive_packet(enc, &pkt);
             update_benchmark("encode_video %d.%d", ost->file_index, ost->index);
-
             if (ret == AVERROR(EAGAIN))
                 break;
             if (ret < 0)
@@ -1434,8 +1431,6 @@ static int reap_filters(int flush)
 
     /* Reap all buffers present in the buffer sinks */
     for (i = 0; i < nb_output_streams; i++) {
-        InputStream *ist = input_streams[i];
-        InputFile    *inf = input_files[ist->file_index];
         OutputStream *ost = output_streams[i];
         OutputFile    *of = output_files[ost->file_index];
         AVFilterContext *filter;
@@ -1511,7 +1506,7 @@ static int reap_filters(int flush)
                             float_pts,
                             enc->time_base.num, enc->time_base.den);
                 }
-                av_dict_copy(&filtered_frame->metadata, inf->ctx->metadata, 0); //copy the metadata of input context to output context.
+
                 do_video_out(of, ost, filtered_frame, float_pts);
                 break;
             case AVMEDIA_TYPE_AUDIO:

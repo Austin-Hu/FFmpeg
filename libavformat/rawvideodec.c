@@ -25,7 +25,6 @@
 #include "libavutil/opt.h"
 #include "internal.h"
 #include "avformat.h"
-#include "url.h"
 
 typedef struct RawVideoDemuxerContext {
     const AVClass *class;     /**< Class for private options. */
@@ -34,18 +33,6 @@ typedef struct RawVideoDemuxerContext {
     AVRational framerate;     /**< AVRational describing framerate, set by a private option. */
 } RawVideoDemuxerContext;
 
-typedef struct AVIOInternal {
-    URLContext *h;
-} AVIOInternal;
-
-typedef struct {
-    enum AVPixelFormat pix_fmt;
-    unsigned int size_x;
-    unsigned int size_y;
-    unsigned long long image_ptr;
-    unsigned int magic;
-    int (*vsbuf_parse_metadata)(char **key, char **value, int size);
-} VSBufContext;
 
 static int rawvideo_read_header(AVFormatContext *ctx)
 {
@@ -87,32 +74,10 @@ static int rawvideo_read_header(AVFormatContext *ctx)
 static int rawvideo_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
     int ret;
-    int i = 0, count = 0;
-    static int last_inserted_cnt = 0;
-    char *key[100], *val[100];
-    AVIOInternal *internal = s->pb->opaque;
-    VSBufContext *vc = ((URLContext*)internal->h)->priv_data;
 
     ret = av_get_packet(s->pb, pkt, s->packet_size);
     pkt->pts = pkt->dts = pkt->pos / s->packet_size;
 
-    if (vc->magic == 0x4EAC812B && vc->vsbuf_parse_metadata) {
-        // FIXME: This is a workaround to remove the appended
-        // key/values of AVFormatContext, otherwise the metadata
-        // of AVFormatContext would increase frame by frame.
-        //
-        // And the correct way should be adding the fetched
-        // metadata into the side data of AVPacket, and
-        // transmitting to the metadata of AVFrame later.
-        if (last_inserted_cnt > 0 && s->metadata)
-            av_dict_partial_free(s->metadata, &last_inserted_cnt);
-
-        count = vc->vsbuf_parse_metadata(key, val, 100);
-        for (;i < count;i++)
-            av_dict_set(&s->metadata, key[i], val[i], 0);
-
-        last_inserted_cnt = count;
-    }
     pkt->stream_index = 0;
     if (ret < 0)
         return ret;

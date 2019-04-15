@@ -473,8 +473,6 @@ static int amf_parse_object(AVFormatContext *s, AVPacket *pkt, AVStream *astream
     AMFDataType amf_type;
     char str_val[1024];
     double num_val;
-    uint8_t *old_side_data = NULL, *side_data = NULL, *tmp_side_data = NULL;
-    int old_side_data_size = 0, new_side_data_size = 0;
 
     num_val  = 0;
     ioc      = s->pb;
@@ -601,39 +599,9 @@ static int amf_parse_object(AVFormatContext *s, AVPacket *pkt, AVStream *astream
                         vpar->height = num_val;
                     }
                 } else if (pkt) {
-                    // Got per-frame metadata, and insert each into the side_data of AVPacket.
-                    // Because av_packet_new_side_data() doesn't support the duplicated side
-                    // data type, we've to append the new data with the original side data.
-                    old_side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, &old_side_data_size);
                     if (amf_type == AMF_DATA_TYPE_NUMBER)
                         snprintf(str_val, sizeof(str_val), "%.f", num_val);
-                    new_side_data_size = old_side_data_size + strlen(key) + strlen(str_val) + 2; // 2 '\0' characters.
-
-                    // The format of assembled side data is "KEY_0 VALUE_0 KEY_1 VALUE_1 ...... KEY_N VALUE_N",
-                    // where keys and values are separated by '\0', because it's required during the parsing
-                    // process by av_packet_unpack_dictionary().
-                    if (old_side_data && old_side_data_size > 0) {
-                        tmp_side_data = av_mallocz(new_side_data_size);
-                        memcpy(tmp_side_data, old_side_data, old_side_data_size);
-                        memcpy(tmp_side_data + old_side_data_size, key, strlen(key));
-                        *(tmp_side_data + old_side_data_size + strlen(key)) = '\0';
-                        memcpy(tmp_side_data + old_side_data_size + strlen(key) + 1, str_val, strlen(str_val));
-                        *(tmp_side_data + old_side_data_size + strlen(key) + 1 + strlen(str_val)) = '\0';
-
-                        av_packet_free_side_data(pkt);
-
-                        side_data = av_packet_new_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, new_side_data_size);
-                        if (side_data)
-                            memcpy(side_data, tmp_side_data, new_side_data_size);
-
-                        av_freep(&tmp_side_data);
-                    } else {
-                        side_data = av_packet_new_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, new_side_data_size);
-                        memcpy(side_data, key, strlen(key));
-                        *(side_data + strlen(key)) = '\0';
-                        memcpy(side_data + strlen(key) + 1, str_val, strlen(str_val));
-                        *(side_data + strlen(key) + 1 + strlen(str_val)) = '\0';
-                    }
+                    av_packet_append_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, key, str_val);
                 }
             }
             if (amf_type == AMF_DATA_TYPE_STRING) {
@@ -647,39 +615,8 @@ static int amf_parse_object(AVFormatContext *s, AVPacket *pkt, AVStream *astream
                     if (   !strcmp (str_val, "MEGA")
                         || !strncmp(str_val, "FlixEngine", 10))
                         flv->broken_sizes = 1;
-                } else if (pkt) {
-                    // Got per-frame metadata, and insert each into the side_data of AVPacket.
-                    // Because av_packet_new_side_data() doesn't support the duplicated side
-                    // data type, we've to append the new data with the original side data.
-                    old_side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, &old_side_data_size);
-                    new_side_data_size = old_side_data_size + strlen(key) + strlen(str_val) + 2; // 2 '\0' characters.
-
-                    // The format of assembled side data is "KEY_0 VALUE_0 KEY_1 VALUE_1 ...... KEY_N VALUE_N",
-                    // where keys and values are separated by '\0', because it's required during the parsing
-                    // process by av_packet_unpack_dictionary().
-                    if (old_side_data && old_side_data_size > 0) {
-                        tmp_side_data = av_mallocz(new_side_data_size);
-                        memcpy(tmp_side_data, old_side_data, old_side_data_size);
-                        memcpy(tmp_side_data + old_side_data_size, key, strlen(key));
-                        *(tmp_side_data + old_side_data_size + strlen(key)) = '\0';
-                        memcpy(tmp_side_data + old_side_data_size + strlen(key) + 1, str_val, strlen(str_val));
-                        *(tmp_side_data + old_side_data_size + strlen(key) + 1 + strlen(str_val)) = '\0';
-
-                        av_packet_free_side_data(pkt);
-
-                        side_data = av_packet_new_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, new_side_data_size);
-                        if (side_data)
-                            memcpy(side_data, tmp_side_data, new_side_data_size);
-
-                        av_freep(&tmp_side_data);
-                    } else {
-                        side_data = av_packet_new_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, new_side_data_size);
-                        memcpy(side_data, key, strlen(key));
-                        *(side_data + strlen(key)) = '\0';
-                        memcpy(side_data + strlen(key) + 1, str_val, strlen(str_val));
-                        *(side_data + strlen(key) + 1 + strlen(str_val)) = '\0';
-                    }
-                }
+                } else if (pkt)
+                    av_packet_append_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, key, str_val);
             }
         }
 

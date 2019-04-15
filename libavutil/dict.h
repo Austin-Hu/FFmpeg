@@ -176,11 +176,6 @@ int av_dict_copy(AVDictionary **dst, const AVDictionary *src, int flags);
 void av_dict_free(AVDictionary **m);
 
 /**
- * Reversely free the specified count of keys and values in a AVDictionary.
- */
-void av_dict_partial_free(AVDictionary *pm, int *free_cnt);
-
-/**
  * Get dictionary entries as a string.
  *
  * Create a string containing dictionary's entries.

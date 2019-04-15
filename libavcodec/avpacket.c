@@ -398,6 +398,52 @@ const char *av_packet_side_data_name(enum AVPacketSideDataType type)
     return NULL;
 }
 
+void av_packet_append_side_data(AVPacket *pkt, enum AVPacketSideDataType type,
+        const char *key, const char *val)
+{
+    uint8_t *old_side_data = NULL, *side_data = NULL, *tmp_side_data = NULL;
+    int old_side_data_size = 0, new_side_data_size = 0;
+
+    if (!pkt || !key || !val)
+        return;
+
+    // Currently only support side data type AV_PKT_DATA_STRINGS_METADATA.
+    if (type != AV_PKT_DATA_STRINGS_METADATA)
+        return;
+
+    // Got per-frame metadata, and insert each into the side_data of AVPacket.
+    // Because av_packet_new_side_data() doesn't support the duplicated side
+    // data type, we've to append the new data with the original side data.
+    old_side_data = av_packet_get_side_data(pkt, type, &old_side_data_size);
+    new_side_data_size = old_side_data_size + strlen(key) + strlen(val) + 2; // 2 '\0' characters.
+
+    // The format of assembled side data is "KEY_0 VALUE_0 KEY_1 VALUE_1 ...... KEY_N VALUE_N",
+    // where keys and values are separated by '\0', because it's required during the parsing
+    // process by av_packet_unpack_dictionary().
+    if (old_side_data && old_side_data_size > 0) {
+        tmp_side_data = av_mallocz(new_side_data_size);
+        memcpy(tmp_side_data, old_side_data, old_side_data_size);
+        memcpy(tmp_side_data + old_side_data_size, key, strlen(key));
+        *(tmp_side_data + old_side_data_size + strlen(key)) = '\0';
+        memcpy(tmp_side_data + old_side_data_size + strlen(key) + 1, val, strlen(val));
+        *(tmp_side_data + old_side_data_size + strlen(key) + 1 + strlen(val)) = '\0';
+
+        av_packet_free_side_data(pkt);
+
+        side_data = av_packet_new_side_data(pkt, type, new_side_data_size);
+        if (side_data)
+            memcpy(side_data, tmp_side_data, new_side_data_size);
+
+        av_freep(&tmp_side_data);
+    } else {
+        side_data = av_packet_new_side_data(pkt, type, new_side_data_size);
+        memcpy(side_data, key, strlen(key));
+        *(side_data + strlen(key)) = '\0';
+        memcpy(side_data + strlen(key) + 1, val, strlen(val));
+        *(side_data + strlen(key) + 1 + strlen(val)) = '\0';
+    }
+}
+
 #if FF_API_MERGE_SD_API
 
 #define FF_MERGE_MARKER 0x8c4d9d108e25e9feULL

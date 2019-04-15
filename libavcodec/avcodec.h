@@ -4475,6 +4475,16 @@ int av_packet_split_side_data(AVPacket *pkt);
 const char *av_packet_side_data_name(enum AVPacketSideDataType type);
 
 /**
+ * Append side information into packet.
+ *
+ * @param pkt packet
+ * @param type desired side information type
+ * @param key, val
+ */
+void av_packet_append_side_data(AVPacket *pkt, enum AVPacketSideDataType type,
+        const char *key, const char *val);
+
+/**
  * Pack a dictionary for use in side_data.
  *
  * @param dict The dictionary to pack.

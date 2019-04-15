@@ -278,6 +278,8 @@ typedef struct {
     int (*vsbuf_parse_metadata)(char **key, char **value, int size);
 } VSBufContext;
 
+#define PER_FRAME_METADATA_MAX_NUM 100
+
 /* Read the data in sane-sized chunks and append to pkt.
  * Return the number of bytes read or an error. */
 static int append_packet_chunked(AVIOContext *s, AVPacket *pkt, int size)
@@ -285,6 +287,8 @@ static int append_packet_chunked(AVIOContext *s, AVPacket *pkt, int size)
     int64_t orig_pos   = pkt->pos; // av_grow_packet might reset pos
     int orig_size      = pkt->size;
     int ret;
+    char *key[PER_FRAME_METADATA_MAX_NUM], *val[PER_FRAME_METADATA_MAX_NUM];
+    int count = 0, i = 0;
 
     do {
         int prev_size = pkt->size;
@@ -313,8 +317,13 @@ static int append_packet_chunked(AVIOContext *s, AVPacket *pkt, int size)
             AVIOInternal *internal = s->opaque;
             VSBufContext *vc = ((URLContext*)internal->h)->priv_data;
 
-            if (vc->magic == 0x4EAC812B)
+            if (vc->magic == 0x4EAC812B) {
                 pkt->data = (unsigned char*)vc->image_ptr;
+                count = vc->vsbuf_parse_metadata(key, val, PER_FRAME_METADATA_MAX_NUM);
+
+                for (int i = 0; i < count; i++)
+                    av_packet_append_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, key[i], val[i]);
+            }
         }
         size -= read_size;
     } while (size > 0);
