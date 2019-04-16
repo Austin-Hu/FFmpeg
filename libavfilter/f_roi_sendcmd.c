@@ -69,27 +69,32 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 {
     AVFilterContext *ctx = inlink->dst;
     ROISendCmdContext *s = ctx->priv;
+    // Currently only support sending command to vf_crop & vf_scale.
     const char *filter_crop = "crop";
     const char *filter_scale = "scale";
     int roi_width = 0, roi_height = 0;
     char buf[1024];
     char tmp[10];
 
+    // s->commands_str is the target VF instance.
+    if (!s->commands_str)
+        return ff_filter_frame(ctx->outputs[0], in);
+
     if (av_stristr(s->commands_str, filter_crop)) {
         // Here s->commands_str is actually the name of crop filter instance.
-        avfilter_graph_send_command(inlink->graph, filter_crop, "x",
+        avfilter_graph_send_command(inlink->graph, s->commands_str, "x",
                 av_dict_get(in->metadata, "left", NULL, 0)->value,
                 buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
 
-        avfilter_graph_send_command(inlink->graph, filter_crop, "y",
+        avfilter_graph_send_command(inlink->graph, s->commands_str, "y",
                 av_dict_get(in->metadata, "top", NULL, 0)->value,
                 buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
 
-        avfilter_graph_send_command(inlink->graph, filter_crop, "w",
+        avfilter_graph_send_command(inlink->graph, s->commands_str, "w",
                 av_dict_get(in->metadata, "width", NULL, 0)->value,
                 buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
 
-        avfilter_graph_send_command(inlink->graph, filter_crop, "h",
+        avfilter_graph_send_command(inlink->graph, s->commands_str, "h",
                 av_dict_get(in->metadata, "height", NULL, 0)->value,
                 buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
     } else if (av_stristr(s->commands_str, filter_scale)) {
@@ -100,19 +105,19 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 
         if (roi_width >= roi_height) {
             sprintf(tmp, "%d", SCALE_DST_WIDTH);
-            avfilter_graph_send_command(inlink->graph, filter_scale, "w",
+            avfilter_graph_send_command(inlink->graph, s->commands_str, "w",
                     tmp, buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
 
             sprintf(tmp, "%d", roi_height * SCALE_DST_WIDTH / roi_width);
-            avfilter_graph_send_command(inlink->graph, filter_scale, "h",
+            avfilter_graph_send_command(inlink->graph, s->commands_str, "h",
                     tmp, buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
         } else {
             sprintf(tmp, "%d", roi_width * SCALE_DST_HEIGHT / roi_height);
-            avfilter_graph_send_command(inlink->graph, filter_scale, "w",
+            avfilter_graph_send_command(inlink->graph, s->commands_str, "w",
                     tmp, buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
 
             sprintf(tmp, "%d", SCALE_DST_HEIGHT);
-            avfilter_graph_send_command(inlink->graph, filter_scale, "h",
+            avfilter_graph_send_command(inlink->graph, s->commands_str, "h",
                     tmp, buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
         }
     } else

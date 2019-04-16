@@ -58,6 +58,79 @@ static int config_output(AVFilterLink *outlink)
     return ff_framesync_configure(&s->fs);
 }
 
+static int set_metadata_with_adjusted_roi(AVFrame *main_frame,
+        AVFrame *roi_frame)
+{
+    int vf_roi_input_width = 0, vf_roi_input_height = 0;
+    int roi_left = 0, roi_top = 0, roi_width = 0, roi_height = 0;
+    int tmp_val = 0;
+    AVDictionaryEntry *t = NULL;
+    char *str = NULL;
+    int length = 0;
+
+    t = av_dict_get(roi_frame->metadata, "base_width", NULL, 0);
+    if (t)
+        vf_roi_input_width = atoi(t->value);
+
+    t = av_dict_get(roi_frame->metadata, "base_height", NULL, 0);
+    if (t)
+        vf_roi_input_height = atoi(t->value);
+
+    if ((vf_roi_input_width == 0) || (vf_roi_input_height == 0)) {
+        av_log(NULL, AV_LOG_ERROR, "Invalid input for vf_roi filter: %d x %d\n",
+                vf_roi_input_width, vf_roi_input_height);
+        return -1;
+    }
+
+    // Adjust the ROI from vf_roi filter, to the real values
+    // relative to original full size.
+    t = av_dict_get(roi_frame->metadata, "left", NULL, 0);
+    if (t) {
+        roi_left = atoi(t->value);
+        tmp_val = roi_left * main_frame->width / vf_roi_input_width;
+        length = snprintf(NULL, 0, "%d", tmp_val);
+        str = malloc(length + 1);
+        snprintf(str, length + 1, "%d", tmp_val);
+        av_dict_set(&main_frame->metadata, "left", str, 0);
+        free(str);
+    }
+
+    t = av_dict_get(roi_frame->metadata, "top", NULL, 0);
+    if (t) {
+        roi_top = atoi(t->value);
+        tmp_val = roi_top * main_frame->height / vf_roi_input_height;
+        length = snprintf(NULL, 0, "%d", tmp_val);
+        str = malloc(length + 1);
+        snprintf(str, length + 1, "%d", tmp_val);
+        av_dict_set(&main_frame->metadata, "top", str, 0);
+        free(str);
+    }
+
+    t = av_dict_get(roi_frame->metadata, "width", NULL, 0);
+    if (t) {
+        roi_width = atoi(t->value);
+        tmp_val = roi_width * main_frame->width / vf_roi_input_width;
+        length = snprintf(NULL, 0, "%d", tmp_val);
+        str = malloc(length + 1);
+        snprintf(str, length + 1, "%d", tmp_val);
+        av_dict_set(&main_frame->metadata, "width", str, 0);
+        free(str);
+    }
+
+    t = av_dict_get(roi_frame->metadata, "height", NULL, 0);
+    if (t) {
+        roi_height = atoi(t->value);
+        tmp_val = roi_height * main_frame->height / vf_roi_input_height;
+        length = snprintf(NULL, 0, "%d", tmp_val);
+        str = malloc(length + 1);
+        snprintf(str, length + 1, "%d", tmp_val);
+        av_dict_set(&main_frame->metadata, "height", str, 0);
+        free(str);
+    }
+
+    return 0;
+}
+
 static int do_add_metadata(FFFrameSync *fs)
 {
     AVFilterContext *ctx = fs->parent;
@@ -72,8 +145,8 @@ static int do_add_metadata(FFFrameSync *fs)
     if (!roi_frame)
         return ff_filter_frame(outlink, main_frame);
 
-    // Copy the ROI related matadata to the main frame.
-    av_dict_copy(&main_frame->metadata, roi_frame->metadata, 0);
+    // Adjust and copy the ROI related matadata to the main frame.
+    set_metadata_with_adjusted_roi(main_frame, roi_frame);
 
     return ff_filter_frame(outlink, main_frame);
 }
