@@ -128,6 +128,19 @@ static int set_metadata_with_adjusted_roi(AVFrame *main_frame,
         free(str);
     }
 
+    // Record the full size info for latter usage (by vf_pad, etc.).
+    length = snprintf(NULL, 0, "%d", main_frame->width);
+    str = malloc(length + 1);
+    snprintf(str, length + 1, "%d", main_frame->width);
+    av_dict_set(&main_frame->metadata, "full_width", str, 0);
+    free(str);
+
+    length = snprintf(NULL, 0, "%d", main_frame->height);
+    str = malloc(length + 1);
+    snprintf(str, length + 1, "%d", main_frame->height);
+    av_dict_set(&main_frame->metadata, "full_height", str, 0);
+    free(str);
+
     return 0;
 }
 

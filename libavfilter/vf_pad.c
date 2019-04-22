@@ -91,8 +91,10 @@ typedef struct PadContext {
     int inlink_w, inlink_h;
     AVRational aspect;
 
-    char *w_expr;           ///< width  expression string
-    char *h_expr;           ///< height expression string
+    char *iw_expr;          ///< width  expression string
+    char *ih_expr;          ///< height expression string
+    char *ow_expr;          ///< width  expression string
+    char *oh_expr;          ///< height expression string
     char *x_expr;           ///< width  expression string
     char *y_expr;           ///< height expression string
     uint8_t rgba_color[4];  ///< color for the padding area
@@ -116,8 +118,8 @@ static int config_input(AVFilterLink *inlink)
 
     var_values[VAR_IN_W]  = var_values[VAR_IW] = inlink->w;
     var_values[VAR_IN_H]  = var_values[VAR_IH] = inlink->h;
-    var_values[VAR_OUT_W] = var_values[VAR_OW] = NAN;
-    var_values[VAR_OUT_H] = var_values[VAR_OH] = NAN;
+    var_values[VAR_OUT_W] = var_values[VAR_OW] = inlink->w;
+    var_values[VAR_OUT_H] = var_values[VAR_OH] = inlink->h;
     var_values[VAR_A]     = (double) inlink->w / inlink->h;
     var_values[VAR_SAR]   = inlink->sample_aspect_ratio.num ?
         (double) inlink->sample_aspect_ratio.num / inlink->sample_aspect_ratio.den : 1;
@@ -125,12 +127,34 @@ static int config_input(AVFilterLink *inlink)
     var_values[VAR_HSUB]  = 1 << s->draw.hsub_max;
     var_values[VAR_VSUB]  = 1 << s->draw.vsub_max;
 
-    /* evaluate width and height */
-    av_expr_parse_and_eval(&res, (expr = s->w_expr),
+    /* evaluate intput width and height */
+    av_expr_parse_and_eval(&res, (expr = s->iw_expr),
+                           var_names, var_values,
+                           NULL, NULL, NULL, NULL, NULL, 0, ctx);
+    s->in_w = var_values[VAR_IN_W] = var_values[VAR_IW] = res;
+    if ((ret = av_expr_parse_and_eval(&res, (expr = s->ih_expr),
+                                      var_names, var_values,
+                                      NULL, NULL, NULL, NULL, NULL, 0, ctx)) < 0)
+        goto eval_fail;
+    s->in_h = var_values[VAR_IN_H] = var_values[VAR_IH] = res;
+    if (!s->in_h)
+        var_values[VAR_IN_H] = var_values[VAR_IH] = s->in_h = inlink->h;
+
+    /* evaluate the width again, as it may depend on the evaluated output height */
+    if ((ret = av_expr_parse_and_eval(&res, (expr = s->iw_expr),
+                                      var_names, var_values,
+                                      NULL, NULL, NULL, NULL, NULL, 0, ctx)) < 0)
+        goto eval_fail;
+    s->in_w = var_values[VAR_IN_W] = var_values[VAR_IW] = res;
+    if (!s->in_w)
+        var_values[VAR_IN_W] = var_values[VAR_IW] = s->in_w = inlink->w;
+
+    /* evaluate output width and height */
+    ret = av_expr_parse_and_eval(&res, (expr = s->ow_expr),
                            var_names, var_values,
                            NULL, NULL, NULL, NULL, NULL, 0, ctx);
     s->w = var_values[VAR_OUT_W] = var_values[VAR_OW] = res;
-    if ((ret = av_expr_parse_and_eval(&res, (expr = s->h_expr),
+    if ((ret = av_expr_parse_and_eval(&res, (expr = s->oh_expr),
                                       var_names, var_values,
                                       NULL, NULL, NULL, NULL, NULL, 0, ctx)) < 0)
         goto eval_fail;
@@ -139,7 +163,7 @@ static int config_input(AVFilterLink *inlink)
         var_values[VAR_OUT_H] = var_values[VAR_OH] = s->h = inlink->h;
 
     /* evaluate the width again, as it may depend on the evaluated output height */
-    if ((ret = av_expr_parse_and_eval(&res, (expr = s->w_expr),
+    if ((ret = av_expr_parse_and_eval(&res, (expr = s->ow_expr),
                                       var_names, var_values,
                                       NULL, NULL, NULL, NULL, NULL, 0, ctx)) < 0)
         goto eval_fail;
@@ -413,18 +437,70 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     return ff_filter_frame(inlink->dst->outputs[0], out);
 }
 
+static int process_command(AVFilterContext *ctx, const char *cmd, const char *args,
+        char *res, int res_len, int flags)
+{
+    PadContext *s = ctx->priv;
+    int ret;
+
+    if (!strcmp(cmd, "in_w") || !strcmp(cmd, "iw")
+            || !strcmp(cmd, "in_h") || !strcmp(cmd, "ih")
+            || !strcmp(cmd, "out_w") || !strcmp(cmd, "ow")
+            || !strcmp(cmd, "out_h") || !strcmp(cmd, "oh")
+            || !strcmp(cmd, "x") || !strcmp(cmd, "y")) {
+
+        int old_x = s->x;
+        int old_y = s->y;
+        int old_iw = s->in_w;
+        int old_ih = s->in_h;
+        int old_ow = s->w;
+        int old_oh = s->h;
+
+        AVFilterLink *outlink = ctx->outputs[0];
+        AVFilterLink *inlink  = ctx->inputs[0];
+
+        av_opt_set(s, cmd, args, 0);
+
+        if ((ret = config_input(inlink)) < 0) {
+            s->x = old_x;
+            s->y = old_y;
+            s->in_w = old_iw;
+            s->in_h = old_ih;
+            s->w = old_ow;
+            s->h = old_oh;
+            return ret;
+        }
+
+        ret = config_output(outlink);
+
+    } else
+        ret = AVERROR(ENOSYS);
+
+    return ret;
+}
+
 #define OFFSET(x) offsetof(PadContext, x)
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM
 
 static const AVOption pad_options[] = {
-    { "width",  "set the pad area width expression",       OFFSET(w_expr), AV_OPT_TYPE_STRING, {.str = "iw"}, CHAR_MIN, CHAR_MAX, FLAGS },
-    { "w",      "set the pad area width expression",       OFFSET(w_expr), AV_OPT_TYPE_STRING, {.str = "iw"}, CHAR_MIN, CHAR_MAX, FLAGS },
-    { "height", "set the pad area height expression",      OFFSET(h_expr), AV_OPT_TYPE_STRING, {.str = "ih"}, CHAR_MIN, CHAR_MAX, FLAGS },
-    { "h",      "set the pad area height expression",      OFFSET(h_expr), AV_OPT_TYPE_STRING, {.str = "ih"}, CHAR_MIN, CHAR_MAX, FLAGS },
+    { "width",  "set the pad area width expression",       OFFSET(ow_expr), AV_OPT_TYPE_STRING, {.str = "ow"}, CHAR_MIN, CHAR_MAX, FLAGS },
+    { "w",      "set the pad area width expression",       OFFSET(ow_expr), AV_OPT_TYPE_STRING, {.str = "ow"}, CHAR_MIN, CHAR_MAX, FLAGS },
+    { "height", "set the pad area height expression",      OFFSET(oh_expr), AV_OPT_TYPE_STRING, {.str = "oh"}, CHAR_MIN, CHAR_MAX, FLAGS },
+    { "h",      "set the pad area height expression",      OFFSET(oh_expr), AV_OPT_TYPE_STRING, {.str = "oh"}, CHAR_MIN, CHAR_MAX, FLAGS },
+    { "out_w",  "set the pad area width expression",       OFFSET(ow_expr), AV_OPT_TYPE_STRING, {.str = "ow"}, CHAR_MIN, CHAR_MAX, FLAGS },
+    { "ow",     "set the pad area width expression",       OFFSET(ow_expr), AV_OPT_TYPE_STRING, {.str = "ow"}, CHAR_MIN, CHAR_MAX, FLAGS },
+    { "out_h",  "set the pad area height expression",      OFFSET(oh_expr), AV_OPT_TYPE_STRING, {.str = "oh"}, CHAR_MIN, CHAR_MAX, FLAGS },
+    { "oh",     "set the pad area height expression",      OFFSET(oh_expr), AV_OPT_TYPE_STRING, {.str = "oh"}, CHAR_MIN, CHAR_MAX, FLAGS },
+
+    { "in_w",   "the input video width and height",        OFFSET(iw_expr), AV_OPT_TYPE_STRING, {.str = "iw"}, CHAR_MIN, CHAR_MAX, FLAGS },
+    { "iw",     "the input video width and height",        OFFSET(iw_expr), AV_OPT_TYPE_STRING, {.str = "iw"}, CHAR_MIN, CHAR_MAX, FLAGS },
+    { "in_h",   "the input video width and height",        OFFSET(ih_expr), AV_OPT_TYPE_STRING, {.str = "ih"}, CHAR_MIN, CHAR_MAX, FLAGS },
+    { "ih",     "the input video width and height",        OFFSET(ih_expr), AV_OPT_TYPE_STRING, {.str = "ih"}, CHAR_MIN, CHAR_MAX, FLAGS },
+
     { "x",      "set the x offset expression for the input image position", OFFSET(x_expr), AV_OPT_TYPE_STRING, {.str = "0"}, CHAR_MIN, CHAR_MAX, FLAGS },
     { "y",      "set the y offset expression for the input image position", OFFSET(y_expr), AV_OPT_TYPE_STRING, {.str = "0"}, CHAR_MIN, CHAR_MAX, FLAGS },
     { "color",  "set the color of the padded area border", OFFSET(rgba_color), AV_OPT_TYPE_COLOR, {.str = "black"}, .flags = FLAGS },
-    { "eval",   "specify when to evaluate expressions",    OFFSET(eval_mode), AV_OPT_TYPE_INT, {.i64 = EVAL_MODE_INIT}, 0, EVAL_MODE_NB-1, FLAGS, "eval" },
+    { "eval",   "specify when to evaluate expressions",    OFFSET(eval_mode), AV_OPT_TYPE_INT, {.i64 = EVAL_MODE_FRAME}, 0, EVAL_MODE_NB-1, FLAGS, "eval" },
          { "init",  "eval expressions once during initialization", 0, AV_OPT_TYPE_CONST, {.i64=EVAL_MODE_INIT},  .flags = FLAGS, .unit = "eval" },
          { "frame", "eval expressions during initialization and per-frame", 0, AV_OPT_TYPE_CONST, {.i64=EVAL_MODE_FRAME}, .flags = FLAGS, .unit = "eval" },
     { "aspect",  "pad to fit an aspect instead of a resolution", OFFSET(aspect), AV_OPT_TYPE_RATIONAL, {.dbl = 0}, 0, DBL_MAX, FLAGS },
@@ -461,4 +537,5 @@ AVFilter ff_vf_pad = {
     .query_formats = query_formats,
     .inputs        = avfilter_vf_pad_inputs,
     .outputs       = avfilter_vf_pad_outputs,
+    .process_command = process_command,
 };

@@ -72,6 +72,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     // Currently only support sending command to vf_crop & vf_scale.
     const char *filter_crop = "crop";
     const char *filter_scale = "scale";
+    const char *filter_pad = "pad";
     int roi_width = 0, roi_height = 0;
     char buf[1024];
     char tmp[10];
@@ -120,6 +121,23 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
             avfilter_graph_send_command(inlink->graph, s->commands_str, "h",
                     tmp, buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
         }
+    } else if (av_stristr(s->commands_str, filter_pad)) {
+        // Here s->commands_str is actually the name of crop filter instance.
+        avfilter_graph_send_command(inlink->graph, s->commands_str, "x",
+                av_dict_get(in->metadata, "left", NULL, 0)->value,
+                buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
+
+        avfilter_graph_send_command(inlink->graph, s->commands_str, "y",
+                av_dict_get(in->metadata, "top", NULL, 0)->value,
+                buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
+
+        avfilter_graph_send_command(inlink->graph, s->commands_str, "iw",
+                av_dict_get(in->metadata, "width", NULL, 0)->value,
+                buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
+
+        avfilter_graph_send_command(inlink->graph, s->commands_str, "ih",
+                av_dict_get(in->metadata, "height", NULL, 0)->value,
+                buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
     } else
         av_log(ctx, AV_LOG_ERROR,
                 "Invalid command for the %s filter.\n",
