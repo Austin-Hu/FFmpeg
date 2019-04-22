@@ -85,6 +85,8 @@ static av_cold void uninit(AVFilterContext *ctx)
     ff_framesync_uninit(&s->fs);
     av_expr_free(s->x_pexpr); s->x_pexpr = NULL;
     av_expr_free(s->y_pexpr); s->y_pexpr = NULL;
+    av_expr_free(s->w_pexpr); s->w_pexpr = NULL;
+    av_expr_free(s->h_pexpr); s->h_pexpr = NULL;
 }
 
 static inline int normalize_xy(double d, int chroma_sub)
@@ -102,6 +104,10 @@ static void eval_expr(AVFilterContext *ctx)
     s->var_values[VAR_Y] = av_expr_eval(s->y_pexpr, s->var_values, NULL);
     /* It is necessary if x is expressed from y  */
     s->var_values[VAR_X] = av_expr_eval(s->x_pexpr, s->var_values, NULL);
+    s->var_values[VAR_OW] = av_expr_eval(s->w_pexpr, s->var_values, NULL);
+    s->var_values[VAR_OH] = av_expr_eval(s->h_pexpr, s->var_values, NULL);
+    s->var_values[VAR_OVERLAY_W] = av_expr_eval(s->w_pexpr, s->var_values, NULL);
+    s->var_values[VAR_OVERLAY_H] = av_expr_eval(s->h_pexpr, s->var_values, NULL);
     s->x = normalize_xy(s->var_values[VAR_X], s->hsub);
     s->y = normalize_xy(s->var_values[VAR_Y], s->vsub);
 }
@@ -137,6 +143,10 @@ static int process_command(AVFilterContext *ctx, const char *cmd, const char *ar
         ret = set_expr(&s->x_pexpr, args, cmd, ctx);
     else if (!strcmp(cmd, "y"))
         ret = set_expr(&s->y_pexpr, args, cmd, ctx);
+    else if (!strcmp(cmd, "w"))
+        ret = set_expr(&s->w_pexpr, args, cmd, ctx);
+    else if (!strcmp(cmd, "h"))
+        ret = set_expr(&s->h_pexpr, args, cmd, ctx);
     else
         ret = AVERROR(ENOSYS);
 
@@ -301,7 +311,9 @@ static int config_input_overlay(AVFilterLink *inlink)
     s->var_values[VAR_POS]   = NAN;
 
     if ((ret = set_expr(&s->x_pexpr,      s->x_expr,      "x",      ctx)) < 0 ||
-        (ret = set_expr(&s->y_pexpr,      s->y_expr,      "y",      ctx)) < 0)
+        (ret = set_expr(&s->y_pexpr,      s->y_expr,      "y",      ctx)) < 0 ||
+        (ret = set_expr(&s->w_pexpr,      s->w_expr,      "w",      ctx)) < 0 ||
+        (ret = set_expr(&s->h_pexpr,      s->h_expr,      "h",      ctx)) < 0)
         return ret;
 
     s->overlay_is_packed_rgb =
@@ -949,10 +961,21 @@ static int do_blend(FFFrameSync *fs)
             NAN : mainpic->pts * av_q2d(inlink->time_base);
         s->var_values[VAR_POS] = pos == -1 ? NAN : pos;
 
-        s->var_values[VAR_OVERLAY_W] = s->var_values[VAR_OW] = second->width;
-        s->var_values[VAR_OVERLAY_H] = s->var_values[VAR_OH] = second->height;
+        s->var_values[VAR_X] = s->x = atoi(av_dict_get(second->metadata, "left", NULL, 0)->value);
+        s->var_values[VAR_Y] = s->y = atoi(av_dict_get(second->metadata, "top", NULL, 0)->value);
+        s->var_values[VAR_OVERLAY_W] = s->var_values[VAR_OW] = second->width =
+            atoi(av_dict_get(second->metadata, "width", NULL, 0)->value);
+        s->var_values[VAR_OVERLAY_H] = s->var_values[VAR_OH] = second->height =
+            atoi(av_dict_get(second->metadata, "height", NULL, 0)->value);
         s->var_values[VAR_MAIN_W   ] = s->var_values[VAR_MW] = mainpic->width;
         s->var_values[VAR_MAIN_H   ] = s->var_values[VAR_MH] = mainpic->height;
+
+
+        if ((ret = set_expr(&s->x_pexpr, av_dict_get(second->metadata, "left", NULL, 0)->value, "x", ctx)) < 0 ||
+                (ret = set_expr(&s->y_pexpr, av_dict_get(second->metadata, "top", NULL, 0)->value, "y", ctx)) < 0 ||
+                (ret = set_expr(&s->w_pexpr, av_dict_get(second->metadata, "width", NULL, 0)->value, "w", ctx)) < 0 ||
+                (ret = set_expr(&s->h_pexpr, av_dict_get(second->metadata, "height", NULL, 0)->value, "h", ctx)) < 0)
+            return ff_filter_frame(ctx->outputs[0], mainpic);
 
         eval_expr(ctx);
         av_log(ctx, AV_LOG_DEBUG, "n:%f t:%f pos:%f x:%f xi:%d y:%f yi:%d\n",
@@ -993,6 +1016,8 @@ static int activate(AVFilterContext *ctx)
 static const AVOption overlay_options[] = {
     { "x", "set the x expression", OFFSET(x_expr), AV_OPT_TYPE_STRING, {.str = "0"}, CHAR_MIN, CHAR_MAX, FLAGS },
     { "y", "set the y expression", OFFSET(y_expr), AV_OPT_TYPE_STRING, {.str = "0"}, CHAR_MIN, CHAR_MAX, FLAGS },
+    { "w", "set the overlay input width", OFFSET(w_expr), AV_OPT_TYPE_STRING, {.str = "0"}, CHAR_MIN, CHAR_MAX, FLAGS },
+    { "h", "set the overlay input height", OFFSET(h_expr), AV_OPT_TYPE_STRING, {.str = "0"}, CHAR_MIN, CHAR_MAX, FLAGS },
     { "eof_action", "Action to take when encountering EOF from secondary input ",
         OFFSET(fs.opt_eof_action), AV_OPT_TYPE_INT, { .i64 = EOF_ACTION_REPEAT },
         EOF_ACTION_REPEAT, EOF_ACTION_PASS, .flags = FLAGS, "eof_action" },

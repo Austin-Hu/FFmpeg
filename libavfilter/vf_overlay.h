@@ -75,6 +75,10 @@ typedef struct OverlayContext {
 
     AVExpr *x_pexpr, *y_pexpr;
 
+    char *w_expr, *h_expr;
+
+    AVExpr *w_pexpr, *h_pexpr;
+
     int (*blend_row[4])(uint8_t *d, uint8_t *da, uint8_t *s, uint8_t *a, int w,
                         ptrdiff_t alinesize);
     int (*blend_slice)(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs);
