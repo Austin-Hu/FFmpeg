@@ -42,6 +42,7 @@
 // Note: person_id needs bgr24 input
 #if CONFIG_LIBPERSONID
 #define VF_ROI_INPUT_FORMAT "bgr24"
+#define SKIP_IDENTIFY_NUM 1
 #else
 #define VF_ROI_INPUT_FORMAT "uyvy422"
 #endif
@@ -55,11 +56,18 @@ typedef struct ROIContext {
     int height;
 #if CONFIG_LIBPERSONID
     personid_t *personid;
+    int filtered_cnt;
+    // Used to record the last ROI info.
+    int recorded_top;
+    int recorded_left;
+    int recorded_width;
+    int recorded_height;
 #endif
 } ROIContext;
 
 #if CONFIG_LIBPERSONID
 #define PERSON_ID_CB_MAGIC 0xCB
+
 static void personid_callback(const char *name, int x, int y,
         int width, int height, float dis, float az, void *context)
 {
@@ -252,6 +260,17 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
         return AVERROR(EINVAL);
     }
 
+    roi_ctx->filtered_cnt++;
+    if (roi_ctx->filtered_cnt % SKIP_IDENTIFY_NUM) {
+        if ((roi_ctx->recorded_width > 0) && (roi_ctx->recorded_height > 0)) {
+            roi_ctx->left = roi_ctx->recorded_left;
+            roi_ctx->top = roi_ctx->recorded_top;
+            roi_ctx->width = roi_ctx->recorded_width;
+            roi_ctx->height = roi_ctx->recorded_height;
+        }
+        goto roi_end;
+    }
+
     personid_identify(roi_ctx->personid, in->height, in->width, in->data[0]);
 
     // Wait to get the person_id callback triggerred.
@@ -272,11 +291,17 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
                 (si.si_value.sival_int == PERSON_ID_CB_MAGIC)) {
             // person_id callback is invoked, and the ROI in ROIContext
             // should be changed.
+            roi_ctx->recorded_left = roi_ctx->left;
+            roi_ctx->recorded_top = roi_ctx->top;
+            roi_ctx->recorded_width = roi_ctx->width;
+            roi_ctx->recorded_height = roi_ctx->height;
+            roi_ctx->filtered_cnt = 0;
             break;
         }
     }
 #endif
 
+roi_end:
     av_log(ctx, AV_LOG_DEBUG, "Set ROI with (%d, %d), %d x %d\n",
             roi_ctx->left, roi_ctx->top, roi_ctx->width, roi_ctx->height);
     meta_data_set_roi(roi_ctx, in);
