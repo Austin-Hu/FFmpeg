@@ -73,6 +73,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     const char *filter_crop = "crop";
     const char *filter_scale = "scale";
     const char *filter_pad = "pad";
+    const char *filter_drawbox = "drawbox";
     int roi_width = 0, roi_height = 0;
     char buf[1024];
     char tmp[10];
@@ -81,8 +82,9 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     if (!s->commands_str)
         return ff_filter_frame(ctx->outputs[0], in);
 
-    if (av_stristr(s->commands_str, filter_crop)) {
-        // Here s->commands_str is actually the name of crop filter instance.
+    if (av_stristr(s->commands_str, filter_crop) ||
+            av_stristr(s->commands_str, filter_drawbox)) {
+        // Here s->commands_str is actually the name of crop or drawbox filter instance.
         avfilter_graph_send_command(inlink->graph, s->commands_str, "x",
                 av_dict_get(in->metadata, "left", NULL, 0)->value,
                 buf, sizeof(buf), AVFILTER_CMD_FLAG_ONE);
