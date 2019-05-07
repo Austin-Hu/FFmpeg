@@ -1001,7 +1001,7 @@ static int flv_write_packet(AVFormatContext *s, AVPacket *pkt)
         s->event_flags &= ~AVSTREAM_EVENT_FLAG_METADATA_UPDATED;
     }
 
-    write_per_frame_metadata(s, pkt, ts);
+    //write_per_frame_metadata(s, pkt, ts);
 
     avio_write_marker(pb, av_rescale(ts, AV_TIME_BASE, 1000),
                       pkt->flags & AV_PKT_FLAG_KEY && (flv->video_par ? par->codec_type == AVMEDIA_TYPE_VIDEO : 1) ? AVIO_DATA_MARKER_SYNC_POINT : AVIO_DATA_MARKER_BOUNDARY_POINT);

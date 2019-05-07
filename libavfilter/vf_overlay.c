@@ -961,8 +961,11 @@ static int do_blend(FFFrameSync *fs)
             NAN : mainpic->pts * av_q2d(inlink->time_base);
         s->var_values[VAR_POS] = pos == -1 ? NAN : pos;
 
-        s->var_values[VAR_X] = s->x = atoi(av_dict_get(second->metadata, "left", NULL, 0)->value);
-        s->var_values[VAR_Y] = s->y = atoi(av_dict_get(second->metadata, "top", NULL, 0)->value);
+        // For Demo: second 1280x720 frame is at the left bottom of main frame.
+        s->var_values[VAR_X] = s->x = atoi(av_dict_get(second->metadata, "left", NULL, 0)->value) +
+            av_expr_eval(s->x_pexpr, s->var_values, NULL);
+        s->var_values[VAR_Y] = s->y = atoi(av_dict_get(second->metadata, "top", NULL, 0)->value) +
+            av_expr_eval(s->y_pexpr, s->var_values, NULL);
         s->var_values[VAR_OVERLAY_W] = s->var_values[VAR_OW] = second->width =
             atoi(av_dict_get(second->metadata, "width", NULL, 0)->value);
         s->var_values[VAR_OVERLAY_H] = s->var_values[VAR_OH] = second->height =
@@ -970,14 +973,16 @@ static int do_blend(FFFrameSync *fs)
         s->var_values[VAR_MAIN_W   ] = s->var_values[VAR_MW] = mainpic->width;
         s->var_values[VAR_MAIN_H   ] = s->var_values[VAR_MH] = mainpic->height;
 
-
+#if 0
         if ((ret = set_expr(&s->x_pexpr, av_dict_get(second->metadata, "left", NULL, 0)->value, "x", ctx)) < 0 ||
                 (ret = set_expr(&s->y_pexpr, av_dict_get(second->metadata, "top", NULL, 0)->value, "y", ctx)) < 0 ||
                 (ret = set_expr(&s->w_pexpr, av_dict_get(second->metadata, "width", NULL, 0)->value, "w", ctx)) < 0 ||
                 (ret = set_expr(&s->h_pexpr, av_dict_get(second->metadata, "height", NULL, 0)->value, "h", ctx)) < 0)
             return ff_filter_frame(ctx->outputs[0], mainpic);
+#endif
 
-        eval_expr(ctx);
+        // REVERTME: For Demo
+        // eval_expr(ctx);
         av_log(ctx, AV_LOG_DEBUG, "n:%f t:%f pos:%f x:%f xi:%d y:%f yi:%d\n",
                s->var_values[VAR_N], s->var_values[VAR_T], s->var_values[VAR_POS],
                s->var_values[VAR_X], s->x,
