@@ -3495,6 +3495,7 @@ vpp_qsv_filter_deps="libmfx"
 vpp_qsv_filter_select="qsvvpp"
 yadif_cuda_filter_deps="cuda_sdk"
 roi_filter_deps="libpersonid"
+seg_filter_deps="gpl"
 
 # examples
 avio_dir_cmd_deps="avformat avutil"
