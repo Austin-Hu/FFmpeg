@@ -34,8 +34,9 @@
 #include "internal.h"
 #include "video.h"
 
-// Note: person_id needs bgr24 input
-#if CONFIG_FANCYVIDEO
+#include <Python.h>
+// Note: FancyVideo needs bgr24 input
+#if CONFIG_LIBFANCYVIDEO
 #define VF_SEG_INPUT_FORMAT "bgr24"
 #else
 #define VF_SEG_INPUT_FORMAT "uyvy422"
@@ -44,21 +45,145 @@
 #define UNUSED(x) (void)(x)
 
 typedef struct SEGContext {
+    PyObject *py_module;
+    PyObject *py_func_dict;
+    PyObject *py_init;
+    PyObject *py_seg;
+    PyObject *py_init_args;
+    PyObject *py_seg_args;
 } SEGContext;
+
+// Hacking to control the Python module to be initialized/uninitialized only once...
+static int first_time = 1;
 
 static int seg_init(AVFilterContext *ctx)
 {
     SEGContext *seg_ctx = ctx->priv;
+    if (!seg_ctx)
+        return -1;
 
-    UNUSED(seg_ctx);
+    if (first_time)
+        return 0;
+
+    Py_Initialize();
+
+    if (!Py_IsInitialized()) {
+        av_log(ctx, AV_LOG_ERROR, "Failed to initialize Python extension.\n");
+        return -1;
+    }
+
+    PyRun_SimpleString("import sys");
+    PyRun_SimpleString("import cv2");
+    PyRun_SimpleString("import caffe");
+    PyRun_SimpleString("import numpy as np");
+    PyRun_SimpleString("import time");
+    PyRun_SimpleString("import lmdb");
+    PyRun_SimpleString("from caffe.proto import caffe_pb2");
+    // Set the current directory, otherwise the Python script can't be loaded.
+    PyRun_SimpleString("sys.path.append('./libavfilter/')");
+
+    PyRun_SimpleString("person_label = 255");
+    PyRun_SimpleString("max_input_height = 480");
+    PyRun_SimpleString("max_input_width = 640");
+
+    // Initialize the model network and weights
+    seg_ctx->py_module = PyImport_ImportModule("predict6");
+    if (!seg_ctx->py_module) {
+        av_log(ctx, AV_LOG_ERROR, "Failed to import the Python module.\n");
+        return -1;
+    }
+
+    seg_ctx->py_func_dict = PyModule_GetDict(seg_ctx->py_module);
+    if (!seg_ctx->py_func_dict) {
+        av_log(ctx, AV_LOG_ERROR, "Failed to get the function dictionary.\n");
+        return -1;
+    }
+
+    seg_ctx->py_init = PyDict_GetItemString(seg_ctx->py_func_dict, "init");
+    if (!seg_ctx->py_init || !PyCallable_Check(seg_ctx->py_init)) {
+        av_log(ctx, AV_LOG_ERROR, "Failed to get the Python init function.\n");
+        return -1;
+    }
+
+    seg_ctx->py_seg = PyDict_GetItemString(seg_ctx->py_func_dict, "segment");
+    if (!seg_ctx->py_seg || !PyCallable_Check(seg_ctx->py_init)) {
+        av_log(ctx, AV_LOG_ERROR, "Failed to get the Python segment function.\n");
+        return -1;
+    }
+
+    seg_ctx->py_init_args = PyTuple_New(0);
+    PyObject_CallObject(seg_ctx->py_init, seg_ctx->py_init_args);
+
     return 0;
 }
 
 static void seg_uninit(AVFilterContext *ctx)
 {
     SEGContext *seg_ctx = ctx->priv;
+#if 0
+    PyObject *poAttrList = NULL;
+    PyObject *poAttrIter = NULL;
+    PyObject *poAttrName = NULL;
+    char *oAttrName = NULL;
+    PyObject *poAttr = NULL;
+#endif
 
-    UNUSED(seg_ctx);
+    if (first_time) {
+        first_time = 0;
+        return;
+    }
+
+    if (seg_ctx->py_init_args)
+        Py_DECREF(seg_ctx->py_init_args);
+
+    if (seg_ctx->py_seg_args)
+        Py_DECREF(seg_ctx->py_seg_args);
+
+    if (seg_ctx->py_seg)
+        Py_DECREF(seg_ctx->py_seg);
+
+    if (seg_ctx->py_init)
+        Py_DECREF(seg_ctx->py_init);
+
+    if (seg_ctx->py_func_dict)
+        Py_DECREF(seg_ctx->py_func_dict);
+
+#if PY_MAJOR_VERSION < 3
+    if (seg_ctx->py_module)
+        Py_DECREF(seg_ctx->py_module);
+
+    Py_Finalize();
+#else
+    if (seg_ctx->py_module) {
+#if 0
+        // Apply the work around from https://github.com/stack-of-tasks/pinocchio/commit/2f0eb3a6789ff3f3255ec147350ff9a2d643aee0
+        poAttrList = PyObject_Dir(seg_ctx->py_module);
+        poAttrIter = PyObject_GetIter(poAttrList);
+
+        while ((poAttrName = PyIter_Next(poAttrIter)) != NULL) {
+            oAttrName = PyUnicode_AS_DATA(poAttrName);
+
+            // Make sure we don't delete any private objects.
+            if (!strstr(oAttrName, "__")) {
+                poAttr = PyObject_GetAttr(seg_ctx->py_module, poAttrName);
+
+                // Make sure we don't delete any module objects.
+                if (poAttr && poAttr->ob_type != seg_ctx->py_module->ob_type)
+                    PyObject_SetAttr(seg_ctx->py_module, poAttrName, NULL);
+                Py_DecRef(poAttr);
+            }
+            Py_DecRef(poAttrName);
+        }
+        Py_DecRef(poAttrIter);
+        Py_DecRef(poAttrList);
+#endif
+
+        Py_DECREF(seg_ctx->py_module);
+    }
+
+    Py_Finalize();
+
+#endif
 }
 
 static int query_formats(AVFilterContext *ctx)
@@ -82,16 +207,17 @@ static int query_formats(AVFilterContext *ctx)
 
 static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 {
-    AVFilterContext *ctx = NULL;
+    AVFilterContext *ctx = inlink->dst;
     SEGContext *seg_ctx = NULL;
 
     if (!inlink || !in)
         return AVERROR(EINVAL);
 
-    ctx = inlink->dst;
-    seg_ctx = inlink->dst->priv;
+    seg_ctx = ctx->priv;
 
-roi_end:
+    seg_ctx->py_seg_args = PyTuple_New(0);
+    PyObject_CallObject(seg_ctx->py_seg, seg_ctx->py_seg_args);
+
     return ff_filter_frame(inlink->dst->outputs[0], in);
 }
 

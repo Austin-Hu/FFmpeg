@@ -265,6 +265,7 @@ External library support:
   --enable-libsvthevc      enable HEVC encoding via svt [no]
   --enable-libevtrec       enable VSBUF via libevtrec [no]
   --enable-libpersonid     enable person_id to identify the ROI of person(s) via libpersonid [no]
+  --enable-libfancyvideo   enable FancyVideo to identify the mask of person(s) via FancyVideo [no]
   --enable-libtensorflow   enable TensorFlow as a DNN module backend
                            for DNN based filters like sr [no]
   --enable-libtesseract    enable Tesseract, needed for ocr filter [no]
@@ -1749,6 +1750,7 @@ EXTERNAL_LIBRARY_LIST="
     libsvthevc
     libevtrec
     libpersonid
+    libfancyvideo
     libtensorflow
     libtesseract
     libtheora
@@ -3495,7 +3497,7 @@ vpp_qsv_filter_deps="libmfx"
 vpp_qsv_filter_select="qsvvpp"
 yadif_cuda_filter_deps="cuda_sdk"
 roi_filter_deps="libpersonid"
-seg_filter_deps="gpl"
+seg_filter_deps="libpython3"
 
 # examples
 avio_dir_cmd_deps="avformat avutil"
@@ -6148,6 +6150,7 @@ enabled libsrt            && require_pkg_config libsrt "srt >= 1.3.0" srt/srt.h 
 enabled libsvthevc        && require_pkg_config libsvthevc SvtHevcEnc EbApi.h EbInitHandle
 enabled libevtrec         && require_pkg_config libevtrec evt_recorder evt_recorder.h evt_rec_init
 enabled libpersonid       && require_pkg_config libpersonid personid person_id_c.h personid_create
+enabled libfancyvideo     && require_pkg_config libpython3 python3 Python.h Py_Initialize
 enabled libtensorflow     && require libtensorflow tensorflow/c/c_api.h TF_Version -ltensorflow
 enabled libtesseract      && require_pkg_config libtesseract tesseract tesseract/capi.h TessBaseAPICreate
 enabled libtheora         && require libtheora theora/theoraenc.h th_info_init -ltheoraenc -ltheoradec -logg
