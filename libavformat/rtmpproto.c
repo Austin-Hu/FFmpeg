@@ -2249,7 +2249,7 @@ static int handle_notify(URLContext *s, RTMPPacket *pkt)
                            &stringlen))
         return AVERROR_INVALIDDATA;
 
-    if (!strcmp(commandbuffer, "onMetaData")) {
+    if (!strcmp(commandbuffer, "onMetaData") || !strcmp(commandbuffer, "perFrameMetaData")) {
         // metadata properties should be stored in a mixed array
         if (bytestream2_get_byte(&gbc) == AMF_DATA_TYPE_MIXEDARRAY) {
             // We have found a metaData Array so flv can determine the streams
@@ -3028,6 +3028,7 @@ static int rtmp_write(URLContext *s, const uint8_t *buf, int size)
                 if (!ff_amf_read_string(&gbc, commandbuffer, sizeof(commandbuffer),
                                         &stringlen)) {
                     if (!strcmp(commandbuffer, "onMetaData") ||
+                        !strcmp(commandbuffer, "perFrameMetaData") ||
                         !strcmp(commandbuffer, "|RtmpSampleAccess")) {
                         uint8_t *ptr;
                         if ((ret = av_reallocp(&rt->out_pkt.data, rt->out_pkt.size + 16)) < 0) {

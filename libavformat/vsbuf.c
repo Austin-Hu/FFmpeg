@@ -43,20 +43,24 @@ typedef struct {
     unsigned int size_y;
     unsigned long long image_ptr;
     unsigned int magic;
+    int (*vsbuf_parse_metadata)(char **key, char **value, int size);
 } VSBufContext;
 
 static int vsbuf_open(URLContext *h, const char *filename, int flags)
 {
     int ret = 0;
     VSBufContext *vc = h->priv_data;
+    const char *test_mac_addr = "default";
+    const char *args[] = {test_mac_addr, };
 
-    ret = evt_rec_init();
+    ret = evt_rec_init(sizeof(args)/sizeof(args[0]), args);
     if (ret) {
         printf("evt_rec_init error\n");
         return ret;
     }
     printf("%s evt_rec_init  success\n", __func__);
     vc->magic = VSBUF_MAGIC;
+    vc->vsbuf_parse_metadata = evt_get_metadata;
 
     return 0;
 }

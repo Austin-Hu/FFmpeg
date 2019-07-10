@@ -27,6 +27,7 @@
 #include "libavutil/common.h"
 #include "libavutil/frame.h"
 #include "libavutil/opt.h"
+#include "libavutil/list.h"
 
 #include "internal.h"
 #include "avcodec.h"
@@ -60,6 +61,8 @@ typedef struct SvtContext {
     int asm_type;
     int forced_idr;
     int la_depth;
+
+    struct list_head list; // To store the metadata of each input AVFrame.
 } SvtContext;
 
 static int error_mapping(EB_ERRORTYPE svt_ret)
@@ -239,6 +242,14 @@ static void read_in_data(EB_H265_ENC_CONFIGURATION *config,
     header_ptr->nFilledLen += frame_size;
 }
 
+typedef struct _EB_FRAMEMETADATA
+{
+    int64_t pts;
+    uint8_t *metadata;
+    int size;
+    struct list_head list;
+} EB_FRAMEMETADATA;
+
 static av_cold int eb_enc_init(AVCodecContext *avctx)
 {
     SvtContext *svt_enc = avctx->priv_data;
@@ -295,6 +306,8 @@ static av_cold int eb_enc_init(AVCodecContext *avctx)
         av_log(avctx, AV_LOG_ERROR, "Failed to alloc data buffer\n");
         goto failed_init_encoder;
     }
+
+    INIT_LIST_HEAD(&svt_enc->list);
     return 0;
 
 failed_init_encoder:
@@ -313,6 +326,10 @@ static int eb_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
     EB_BUFFERHEADERTYPE *header_ptr = &svt_enc->in_buf;
     EB_ERRORTYPE svt_ret;
     int av_ret;
+    int metadata_size = 0;
+    uint8_t *side_data = NULL;
+    struct list_head *pos, *n;
+    EB_FRAMEMETADATA *p;
 
     if (EOS_RECEIVED == svt_enc->eos_flag) {
         *got_packet = 0;
@@ -340,6 +357,21 @@ static int eb_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
         EbH265EncSendPicture(svt_enc->svt_handle, header_ptr);
 
         av_log(avctx, AV_LOG_DEBUG, "Sent PTS %"PRId64"\n", header_ptr->pts);
+
+        if (frame->metadata) {
+            list_for_each_safe(pos, n, &svt_enc->list) {
+                p = list_entry(pos, EB_FRAMEMETADATA, list);
+                if (frame->pts == p->pts)
+                    return 0;
+            }
+
+            // Added the entry.
+            p = av_mallocz(sizeof(EB_FRAMEMETADATA));
+            p->metadata = av_packet_pack_dictionary(frame->metadata, &metadata_size);
+            p->size = metadata_size;
+            p->pts = frame->pts;
+            list_add_tail(&p->list, &svt_enc->list);
+        }
     }
 
     header_ptr = NULL;
@@ -370,6 +402,26 @@ static int eb_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
         pkt->flags |= AV_PKT_FLAG_KEY;
     if (header_ptr->sliceType == EB_NON_REF_PICTURE)
         pkt->flags |= AV_PKT_FLAG_DISPOSABLE;
+
+    // Copy the backup metadata of AVFrame into the side data of corresponding
+    // AVPacket which has the same pts, for the per-frame Metadata feature.
+    // Here we've to use the doubly linked list (copied from kernel), because
+    // The AVFrames are feeded into encoder sequently (PTS), but AVPackets would
+    // be out of order.
+    list_for_each_safe(pos, n, &svt_enc->list) {
+        p = list_entry(pos, EB_FRAMEMETADATA, list);
+        if (pkt->pts == p->pts) {
+            if (p->metadata && p->size > 0) {
+                side_data = av_packet_new_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, p->size);
+                memcpy(side_data, p->metadata, p->size);
+
+                av_freep(&p->metadata);
+                list_del(&p->list);
+                av_freep(&p);
+            }
+            break;
+        }
+    }
 
     EbH265ReleaseOutBuffer(&header_ptr);
 

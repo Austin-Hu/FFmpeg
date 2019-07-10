@@ -476,8 +476,6 @@ static void write_metadata(AVFormatContext *s, unsigned int ts)
     avio_wb32(pb, flv->metadata_totalsize + 11);
 }
 
-#define PER_FRAME_METADATA_ENTRIES 4
-static int frame_cnt = 0;
 static void write_per_frame_metadata(AVFormatContext *s, AVPacket *pkt,
         unsigned int ts)
 {
@@ -485,6 +483,14 @@ static void write_per_frame_metadata(AVFormatContext *s, AVPacket *pkt,
     FLVContext *flv = s->priv_data;
     int metadata_count = 0;
     int64_t metadata_count_pos = 0;
+    AVDictionary *dict = NULL;
+    AVDictionaryEntry *tag = NULL;
+    int size;
+    const uint8_t *side_metadata =
+        av_packet_get_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, &size);
+
+    if (!side_metadata || size <= 0)
+        return;
 
     /* write meta_tag */
     avio_w8(pb, FLV_TAG_TYPE_META);            // tag type META
@@ -502,38 +508,17 @@ static void write_per_frame_metadata(AVFormatContext *s, AVPacket *pkt,
     /* mixed array (hash) with size and string/type/data tuples */
     avio_w8(pb, AMF_DATA_TYPE_MIXEDARRAY);
     metadata_count_pos = avio_tell(pb);
-    metadata_count = PER_FRAME_METADATA_ENTRIES;
     avio_wb32(pb, metadata_count);
 
-    // TODO: remove the experimental metadata change per 10 frames, after
-    // getting the dynamic metadata or side data of AVFrame during encoding.
-    frame_cnt++;
-    put_amf_string(pb, "per_frame_top");
-    if (frame_cnt / 10)
-        put_amf_double(pb, 300);
-    else
-        put_amf_double(pb, 320);
-
-    put_amf_string(pb, "per_frame_left");
-    if (frame_cnt / 10)
-        put_amf_double(pb, 400);
-    else
-        put_amf_double(pb, 430);
-
-    put_amf_string(pb, "per_frame_width");
-    if (frame_cnt / 10)
-        put_amf_double(pb, 2000);
-    else
-        put_amf_double(pb, 2500);
-
-    put_amf_string(pb, "per_frame_height");
-    if (frame_cnt / 10)
-        put_amf_double(pb, 1000);
-    else
-        put_amf_double(pb, 1700);
-
-    if (frame_cnt >= 20)
-        frame_cnt = 0;
+    if (av_packet_unpack_dictionary(side_metadata, size, &dict) >= 0) {
+        while ((tag = av_dict_get(dict, "", tag, AV_DICT_IGNORE_SUFFIX))) {
+            put_amf_string(pb, tag->key);
+            avio_w8(pb, AMF_DATA_TYPE_STRING);
+            put_amf_string(pb, tag->value);
+            metadata_count++;
+        }
+    }
+    av_dict_free(&dict);
 
     put_amf_string(pb, "");
     avio_w8(pb, AMF_END_OF_OBJECT);

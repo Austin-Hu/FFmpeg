@@ -275,6 +275,7 @@ typedef struct {
     unsigned int size_y;
     unsigned long long image_ptr;
     unsigned int magic;
+    int (*vsbuf_parse_metadata)(char **key, char **value, int size);
 } VSBufContext;
 
 /* Read the data in sane-sized chunks and append to pkt.

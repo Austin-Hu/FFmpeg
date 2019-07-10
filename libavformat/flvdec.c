@@ -465,7 +465,7 @@ finish:
 
 static int amf_parse_object(AVFormatContext *s, AVPacket *pkt, AVStream *astream,
                             AVStream *vstream, const char *key,
-                            int64_t max_pos, int depth)
+                            int64_t max_pos, int depth, int is_per_frame_meta)
 {
     AVCodecParameters *apar, *vpar;
     FLVContext *flv = s->priv_data;
@@ -504,8 +504,8 @@ static int amf_parse_object(AVFormatContext *s, AVPacket *pkt, AVStream *astream
                 add_keyframes_index(s);
         while (avio_tell(ioc) < max_pos - 2 &&
                amf_get_string(ioc, str_val, sizeof(str_val)) > 0)
-            if (amf_parse_object(s, NULL, astream, vstream, str_val, max_pos,
-                                 depth + 1) < 0)
+            if (amf_parse_object(s, pkt, astream, vstream, str_val, max_pos,
+                                 depth + 1, is_per_frame_meta) < 0)
                 return -1;     // if we couldn't skip, bomb out.
         if (avio_r8(ioc) != AMF_END_OF_OBJECT) {
             av_log(s, AV_LOG_ERROR, "Missing AMF_END_OF_OBJECT in AMF_DATA_TYPE_OBJECT\n");
@@ -525,7 +525,7 @@ static int amf_parse_object(AVFormatContext *s, AVPacket *pkt, AVStream *astream
             // this is the only case in which we would want a nested
             // parse to not skip over the object
             if (amf_parse_object(s, pkt, astream, vstream, str_val, max_pos,
-                                 depth + 1) < 0)
+                                 depth + 1, is_per_frame_meta) < 0)
                 return -1;
         v = avio_r8(ioc);
         if (v != AMF_END_OF_OBJECT) {
@@ -540,8 +540,8 @@ static int amf_parse_object(AVFormatContext *s, AVPacket *pkt, AVStream *astream
 
         arraylen = avio_rb32(ioc);
         for (i = 0; i < arraylen && avio_tell(ioc) < max_pos - 1; i++)
-            if (amf_parse_object(s, NULL, NULL, NULL, NULL, max_pos,
-                                 depth + 1) < 0)
+            if (amf_parse_object(s, pkt, NULL, NULL, NULL, max_pos,
+                                 depth + 1, is_per_frame_meta) < 0)
                 return -1;      // if we couldn't skip, bomb out.
     }
     break;
@@ -605,7 +605,8 @@ static int amf_parse_object(AVFormatContext *s, AVPacket *pkt, AVStream *astream
                     // Because av_packet_new_side_data() doesn't support the duplicated side
                     // data type, we've to append the new data with the original side data.
                     old_side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, &old_side_data_size);
-                    snprintf(str_val, sizeof(str_val), "%.f", num_val);
+                    if (amf_type == AMF_DATA_TYPE_NUMBER)
+                        snprintf(str_val, sizeof(str_val), "%.f", num_val);
                     new_side_data_size = old_side_data_size + strlen(key) + strlen(str_val) + 2; // 2 '\0' characters.
 
                     // The format of assembled side data is "KEY_0 VALUE_0 KEY_1 VALUE_1 ...... KEY_N VALUE_N",
@@ -646,6 +647,38 @@ static int amf_parse_object(AVFormatContext *s, AVPacket *pkt, AVStream *astream
                     if (   !strcmp (str_val, "MEGA")
                         || !strncmp(str_val, "FlixEngine", 10))
                         flv->broken_sizes = 1;
+                } else if (pkt) {
+                    // Got per-frame metadata, and insert each into the side_data of AVPacket.
+                    // Because av_packet_new_side_data() doesn't support the duplicated side
+                    // data type, we've to append the new data with the original side data.
+                    old_side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, &old_side_data_size);
+                    new_side_data_size = old_side_data_size + strlen(key) + strlen(str_val) + 2; // 2 '\0' characters.
+
+                    // The format of assembled side data is "KEY_0 VALUE_0 KEY_1 VALUE_1 ...... KEY_N VALUE_N",
+                    // where keys and values are separated by '\0', because it's required during the parsing
+                    // process by av_packet_unpack_dictionary().
+                    if (old_side_data && old_side_data_size > 0) {
+                        tmp_side_data = av_mallocz(new_side_data_size);
+                        memcpy(tmp_side_data, old_side_data, old_side_data_size);
+                        memcpy(tmp_side_data + old_side_data_size, key, strlen(key));
+                        *(tmp_side_data + old_side_data_size + strlen(key)) = '\0';
+                        memcpy(tmp_side_data + old_side_data_size + strlen(key) + 1, str_val, strlen(str_val));
+                        *(tmp_side_data + old_side_data_size + strlen(key) + 1 + strlen(str_val)) = '\0';
+
+                        av_packet_free_side_data(pkt);
+
+                        side_data = av_packet_new_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, new_side_data_size);
+                        if (side_data)
+                            memcpy(side_data, tmp_side_data, new_side_data_size);
+
+                        av_freep(&tmp_side_data);
+                    } else {
+                        side_data = av_packet_new_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, new_side_data_size);
+                        memcpy(side_data, key, strlen(key));
+                        *(side_data + strlen(key)) = '\0';
+                        memcpy(side_data + strlen(key) + 1, str_val, strlen(str_val));
+                        *(side_data + strlen(key) + 1 + strlen(str_val)) = '\0';
+                    }
                 }
             }
         }
@@ -668,6 +701,10 @@ static int amf_parse_object(AVFormatContext *s, AVPacket *pkt, AVStream *astream
             !strcmp(key, "stereo")          ||
             !strcmp(key, "audiocodecid")    ||
             !strcmp(key, "datastream")) && !flv->dump_full_metadata)
+            return 0;
+
+        // Per-frame metadata shouldn't be inserted into the metadata of AVFormatContext.
+        if (is_per_frame_meta)
             return 0;
 
         s->event_flags |= AVFMT_EVENT_FLAG_METADATA_UPDATED;
@@ -746,7 +783,7 @@ static int flv_read_metabody(AVFormatContext *s, int64_t next_pos)
     }
 
     // parse the second object (we want a mixed array)
-    if (amf_parse_object(s, NULL, astream, vstream, buffer, next_pos, 0) < 0)
+    if (amf_parse_object(s, NULL, astream, vstream, buffer, next_pos, 0, 0) < 0)
         return -1;
 
     return 0;
@@ -771,7 +808,7 @@ static int flv_read_per_frame_metabody(AVFormatContext *s, AVPacket *pkt,
     }
 
     // parse the second object (we want a mixed array)
-    if (amf_parse_object(s, pkt, NULL, NULL, buffer, next_pos, 0) < 0)
+    if (amf_parse_object(s, pkt, NULL, NULL, buffer, next_pos, 0, 1) < 0)
         return -1;
 
     return 0;

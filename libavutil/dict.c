@@ -214,6 +214,19 @@ void av_dict_free(AVDictionary **pm)
     av_freep(pm);
 }
 
+void av_dict_partial_free(AVDictionary *pm, int *free_cnt)
+{
+    if (!pm || !free_cnt || (*free_cnt <= 0))
+        return;
+
+    while (*free_cnt) {
+        av_freep(&(pm->elems[*free_cnt - 1].key));
+        av_freep(&(pm->elems[*free_cnt - 1].value));
+        pm->count--;
+        (*free_cnt)--;
+    }
+}
+
 int av_dict_copy(AVDictionary **dst, const AVDictionary *src, int flags)
 {
     AVDictionaryEntry *t = NULL;
